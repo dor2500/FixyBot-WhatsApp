@@ -237,9 +237,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     
     try:
-        # Get the photo file from Telegram (highest resolution)
-        photo = update.message.photo[-1]
-        photo_file = await photo.get_file()
+        # Get the photo file from Telegram (highest resolution) or document
+        if update.message.photo:
+            file_obj = update.message.photo[-1]
+        elif update.message.document:
+            file_obj = update.message.document
+        else:
+            raise ValueError("No photo or document found in message.")
+            
+        photo_file = await file_obj.get_file()
         image_bytearray = await photo_file.download_as_bytearray()
         image_bytes = bytes(image_bytearray)
         
@@ -342,8 +348,8 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("reload", reload_command))
     
-    # Process photos
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    # Process photos and image documents (like uncompressed screenshots)
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     
     # Process all text messages (excluding commands)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
