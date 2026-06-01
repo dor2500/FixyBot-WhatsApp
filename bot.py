@@ -375,8 +375,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
-    # Instantly reply with a temporary message
-    temp_msg = await update.message.reply_text("🔍 <b>בודק במאגר המידע...</b>", parse_mode="HTML")
+    # Instantly reply with a cute loading GIF
+    LOADING_GIF_URL = "https://media.tenor.com/On7kvXhzml4AAAAj/loading-gif.gif"
+    try:
+        temp_msg = await update.message.reply_animation(
+            animation=LOADING_GIF_URL,
+            caption="🔍 <b>מנתח וחושב...</b>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        # Fallback to text if GIF fails
+        temp_msg = await update.message.reply_text("🔍 <b>מנתח וחושב...</b>", parse_mode="HTML")
 
     # Trigger typing action in Telegram
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -432,22 +441,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         scripts = extract_scripts(bot_response)
         display_text = clean_script_tags(bot_response) if scripts else bot_response
             
-        # Try editing temporary message with HTML parsing
+        # Send the final text and delete the loading animation
         try:
-            await context.bot.edit_message_text(
+            await context.bot.send_message(
                 chat_id=chat_id,
-                message_id=temp_msg.message_id,
                 text=display_text,
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_to_message_id=update.message.message_id
             )
+            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
         except Exception as telegram_html_error:
-            logger.warning(f"Telegram HTML editing failed, falling back to plain text: {telegram_html_error}")
+            logger.warning(f"Telegram HTML failed, falling back to plain text: {telegram_html_error}")
             clean_text = re.sub(r'<[^>]+>', '', display_text)
-            await context.bot.edit_message_text(
+            await context.bot.send_message(
                 chat_id=chat_id,
-                message_id=temp_msg.message_id,
-                text=clean_text
+                text=clean_text,
+                reply_to_message_id=update.message.message_id
             )
+            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
 
         # Send script files as downloadable documents
         for filename, content in scripts:
@@ -484,8 +495,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     caption = update.message.caption or ""
     
-    # Instantly reply with a temporary message
-    temp_msg = await update.message.reply_text("🔍 <b>מנתח את התמונה ומחפש פתרון...</b>", parse_mode="HTML")
+    # Instantly reply with a cute loading GIF
+    LOADING_GIF_URL = "https://media.tenor.com/On7kvXhzml4AAAAj/loading-gif.gif"
+    try:
+        temp_msg = await update.message.reply_animation(
+            animation=LOADING_GIF_URL,
+            caption="🔍 <b>מנתח את התמונה ומחפש פתרון...</b>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        # Fallback to text if GIF fails
+        temp_msg = await update.message.reply_text("🔍 <b>מנתח את התמונה ומחפש פתרון...</b>", parse_mode="HTML")
 
     # Trigger typing action in Telegram
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -581,22 +601,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         scripts = extract_scripts(display_text)
         display_text = clean_script_tags(display_text) if scripts else display_text
             
-        # Try editing temporary message with HTML parsing
+        # Send the final text and delete the loading animation
         try:
-            await context.bot.edit_message_text(
+            await context.bot.send_message(
                 chat_id=chat_id,
-                message_id=temp_msg.message_id,
                 text=display_text,
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_to_message_id=update.message.message_id
             )
+            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
         except Exception as telegram_html_error:
-            logger.warning(f"Telegram HTML rendering failed for photo analysis, falling back to plain text: {telegram_html_error}")
+            logger.warning(f"Telegram HTML failed for photo analysis, falling back to plain text: {telegram_html_error}")
             clean_text = re.sub(r'<[^>]+>', '', display_text)
-            await context.bot.edit_message_text(
+            await context.bot.send_message(
                 chat_id=chat_id,
-                message_id=temp_msg.message_id,
-                text=clean_text
+                text=clean_text,
+                reply_to_message_id=update.message.message_id
             )
+            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
 
         # Send script files as downloadable documents
         for filename, content in scripts:
