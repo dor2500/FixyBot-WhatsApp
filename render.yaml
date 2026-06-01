@@ -9,8 +9,8 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: KB_URL
-        sync: false
+        value: https://raw.githubusercontent.com/dor2500/FixyBot/main/helpdesk_knowledge_base_v2.md
       - key: GITHUB_REPO
-        sync: false
+        value: dor2500/FixyBot
       - key: GITHUB_TOKEN
         sync: false
