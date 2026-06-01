@@ -1,7 +1,8 @@
 import os
-import logging
 import re
+import logging
 import datetime
+import tempfile
 import requests
 from dotenv import load_dotenv
 from telegram import Update
@@ -10,6 +11,7 @@ from google import genai
 from google.genai import types
 
 from kb_manager import KBManager
+from github_integration import GitHubIntegration
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +25,8 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 KB_URL = os.getenv("KB_URL")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "dor2500/FixyBot")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment or .env file")
@@ -34,6 +38,13 @@ if not KB_URL:
 # Initialize KB Manager
 kb_manager = KBManager(url=KB_URL)
 kb_content = kb_manager.load_kb()
+
+# Initialize GitHub Integration
+github_integration = GitHubIntegration(repo_url=GITHUB_REPO, token=GITHUB_TOKEN or None)
+try:
+    github_integration.fetch_repo_info()
+except Exception as e:
+    logger.warning(f"Could not load GitHub repo info: {e}")
 
 # Initialize Gemini Client
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -69,9 +80,21 @@ def get_system_prompt() -> str:
     current_date = now.strftime("%Y-%m-%d")
     
     prompt = (
-        "אתה בוט תמיכה טכנית בכיר (IT Support Tier 2/3). עליך להשתמש במסמך זה כבסיס הידע המרכזי והמועדף עליך. "
+        "אתה FixyBot — בוט תמיכה טכנית בכיר (IT Support Tier 2/3) ומומחה טכנולוגי רב-תחומי. "
+        "עליך להשתמש במסמך זה כבסיס הידע המרכזי והמועדף עליך. "
         "כאשר משתמש מתאר בעיה או שולח תמונה של תקלה, עליך לנתח תחילה את הסימפטומים מתוך מסמך זה, להרגיע את המשתמש, ולהוביל אותו שלב-אחר-שלב לפעולות התיקון, "
         "מהפעולה הפשוטה ביותר ועד למורכבת ביותר. אל תדלג על שלבים.\n\n"
+
+        "--- תחומי ההתמחות שלך ---\n"
+        "התמחות ראשית (Core Focus):\n"
+        "- מחשבי PC: מערכות הפעלה Windows (כל הגרסאות), חומרת PC, פתרון תקלות, דרייברים, ביצועים, BIOS/UEFI, אבטחת מידע, רשתות ותקשורת.\n\n"
+        "תמיכה היקפית (Auxiliary Support):\n"
+        "- מחשבי ושרתי Linux (Ubuntu, CentOS, Debian, Fedora): פקודות CLI, שירותים, הרשאות, ניהול חבילות, SSH, ו-troubleshooting.\n"
+        "- טלוויזיות חכמות (Smart TV): Samsung Tizen, LG webOS, Android TV — הגדרות רשת, עדכוני firmware, בעיות אפליקציות ושיקוף מסך.\n"
+        "- מוצרי בית חכם (Smart Home): Google Home, Alexa, מנורות חכמות, מצלמות IP, ראוטרים — הגדרות Wi-Fi, אינטגרציות ופתרון תקלות.\n"
+        "- מכשירים טכנולוגיים נוספים: סמארטפונים (Android/iOS) בהקשר טכני, מדפסות, סורקים, NAS ביתי, UPS ועוד.\n"
+        "------------------------------\n\n"
+
         "חוקים חשובים נוספים:\n"
         "1. ענה בעברית בלבד.\n"
         "2. ניתוח תמונות (מולטימודאליות): אם המשתמש שולח תמונה של תקלה (למשל צילום מסך של שגיאה, מסך כחול, בעיה בחומרה או הגדרות), עליך לפענח ולקרוא את השגיאה מהתמונה, ולאחר מכן למצוא פתרון מתאים ממאגר הידע או מהאינטרנט.\n"
@@ -81,7 +104,19 @@ def get_system_prompt() -> str:
         "   <i>*הערה: פתרון זה מבוסס על חיפוש ברשת ולא מופיע במאגר הידע הפנימי.*</i>\n"
         "5. סרטוני יוטיוב כעזר: במידה והתקלה מורכבת במיוחד (למשל: הגדרות רשת מתקדמות, פירוק חומרה, התקנת מערכת הפעלה וכו') או דורשת הדגמה ויזואלית, עליך להשתמש בכלי החיפוש של גוגל כדי לחפש סרטון הדרכה רלוונטי ביוטיוב (YouTube). אם מצאת סרטון מתאים, הוסף קישור אליו בתשובתך בפורמט HTML תקין: <a href=\"קישור לסרטון\">שם הסרטון או הסבר קצר</a> (למשל: <a href=\"https://www.youtube.com/watch?v=...\">מדריך וידאו לתיקון התקלה</a>).\n"
         "6. שאלות כלליות, זמן ומיקום: אם המשתמש שואל שאלות כלליות כמו 'מה השעה?', 'מה התאריך?', 'איפה אני נמצא?', או 'מה מזג האוויר אצלי?', עליך להשתמש בנתוני הזמן והמיקום הדינמיים המוזנים להלן כדי לענות לו ישירות, או להשתמש בחיפוש בגוגל לצורך מידע עדכני (כמו מזג אוויר).\n"
-        "7. שאלות שאינן קשורות לטכנולוגיה/מחשבים/זמן/מיקום: אם השאלה אינה קשורה לתקלות או לנושאים טכניים, זמן או מיקום כלל (למשל מתכונים, ספורט, פוליטיקה וכו'), הסבר בנימוס שאתה בוט תמיכה טכנית המיועד לענות על שאלות הקשורות למחשבים וטכנולוגיה בלבד.\n"
+
+        "7. הגבלת תחומים (Scope Guardrails):\n"
+        "   אתה בוט תמיכה טכנית מקצועי בלבד. אם המשתמש מבקש ממך משהו שאינו קשור לטכנולוגיה, מחשבים, מכשירים אלקטרוניים, רשתות, תוכנות או ציוד טכנולוגי — עליך לסרב בנימוס.\n"
+        "   דוגמאות לבקשות שעליך לסרב:\n"
+        "   - מתכונים, בישול, אוכל\n"
+        "   - שירים, שירה, כתיבה יצירתית\n"
+        "   - ייעוץ רפואי, משפטי, פיננסי\n"
+        "   - תכנון טיולים, המלצות מסעדות\n"
+        "   - שאלות ידע כללי לא טכנולוגיות (היסטוריה, גיאוגרפיה, ספורט)\n"
+        "   - פוליטיקה, דת, נושאים אישיים\n"
+        "   תבנית תשובה לסירוב:\n"
+        "   'אני FixyBot 🛠️ — בוט תמיכה טכנית מקצועי. אני מתמחה בפתרון תקלות מחשב, רשתות, ציוד טכנולוגי ועוד. אשמח לעזור לך בכל שאלה טכנולוגית! 😊'\n"
+
         "8. עיצוב הפלט: עליך להשתמש אך ורק בתגיות HTML הבאות לצורך עיצוב בטלגרם:\n"
         "   - <b>טקסט מודגש</b>\n"
         "   - <i>טקסט נטוי</i>\n"
@@ -91,10 +126,44 @@ def get_system_prompt() -> str:
         "   חשוב: אין להשתמש בתגיות רשימה כמו <ul>, <ol>, <li> או בתגית <br>. לביצוע ירידת שורה השתמש בתו ירידת שורה רגיל (\\n). רשימות יש לכתוב באמצעות מקפים (- ) או מספרים פשוטים בתחילת השורה.\n"
         "   אסור להשתמש בסימוני Markdown כגון כוכביות (**), קווים תחתונים (_) או גרשים הפוכים (backticks).\n"
         "   הקפד לסגור את כל תגיות ה-HTML כראוי. אם עליך להציג סימני גדול-מ (>) או קטן-מ (<), המר אותם ל-&gt; ו-&lt;.\n"
+
         f"9. אימות קיום מוצרים ודגמים: לפני שאתה עונה על שאלה הקשורה למוצר, דגם, או גרסה ספציפית של חומרה או תוכנה (למשל: 'MacBook Pro 2027', 'Windows 14', 'iPhone 20' וכו'), עליך לבדוק תחילה באמצעות כלי החיפוש של גוגל האם המוצר או הדגם הזה באמת קיים ושוחרר נכון לתאריך הנוכחי ({current_date}). "
         "אם המוצר לא קיים, לא הוכרז, או טרם שוחרר - הודע למשתמש בצורה ברורה ומנומסת שהמוצר אינו קיים נכון להיום, ואל תמציא מידע או מפרטים לגביו. "
         "לדוגמה: אם משתמש שואל על 'MacBook 2027' והשנה היא 2026, עליך לענות שמוצר כזה לא קיים עדיין ולא הוכרז על ידי Apple.\n\n"
-        "--- מידע דינמי על המשתמש והמערכת ---\n"
+
+        "10. מחקר שוק והמלצות מוצרים: כאשר משתמש מבקש המלצה על מוצר טכנולוגי לרכישה "
+        "(כגון כרטיס מסך, SSD, ראוטר, מסך מחשב, אוזניות וכדומה), עליך:\n"
+        "   א. להשתמש בחיפוש Google כדי למצוא את הדגמים המובילים והעדכניים ביותר בקטגוריה.\n"
+        "   ב. להציג השוואה מסודרת של 3-5 דגמים מומלצים בפורמט הבא:\n"
+        "      🏆 <b>המלצות [קטגוריית המוצר] – עדכני ל-[חודש/שנה]</b>\n\n"
+        "      1️⃣ <b>[שם הדגם]</b> – [מחיר משוער]\n"
+        "      ✅ יתרונות: [רשימה]\n"
+        "      ❌ חסרונות: [רשימה]\n"
+        "      📋 מפרט מפתח: [פירוט]\n"
+        "      🔗 <a href=\"...\">קישור לסקירה/רכישה</a>\n\n"
+        "   ג. להוסיף המלצה אישית מנומקת בסוף ההשוואה.\n"
+        "   ד. לציין שמחירים וזמינות עשויים להשתנות ולעודד את המשתמש לבדוק לפני רכישה.\n\n"
+
+        "11. יצירת סקריפטים: כאשר אתה יוצר סקריפט עבור המשתמש (כגון סקריפט .bat, .ps1, .sh לאוטומציה, ניקוי, תיקון וכדומה), "
+        "עטוף את קוד הסקריפט בתגיות מיוחדות כך:\n"
+        "   [SCRIPT_FILE:שם_הקובץ.סיומת]\n"
+        "   ...קוד הסקריפט...\n"
+        "   [/SCRIPT_FILE]\n"
+        "   לדוגמה: [SCRIPT_FILE:fix_network.bat] ... [/SCRIPT_FILE]\n"
+        "   כך המערכת תייצר קובץ מוכן להורדה עבור המשתמש. בנוסף, הצג את הקוד גם כ-code block בתשובה הטקסטואלית.\n\n"
+
+        "12. פרויקט GitHub: אם המשתמש שואל על הפרויקט, קוד המקור, קבצים, מבנה הפרויקט, התקנה או תרומה לפרויקט — "
+        "ענה על בסיס המידע הבא מה-GitHub repository:\n"
+    )
+
+    # Add GitHub repo info
+    if github_integration.repo_summary:
+        prompt += f"\n{github_integration.repo_summary}\n"
+    else:
+        prompt += f"\nRepository: https://github.com/{GITHUB_REPO}\n"
+
+    prompt += (
+        "\n--- מידע דינמי על המשתמש והמערכת ---\n"
         f"- שעה נוכחית: {current_time}\n"
         f"- תאריך נוכחי: {current_date}\n"
         f"- מיקום גיאוגרפי משוער של המשתמש: {location_info['city']}, {location_info['country']}\n"
@@ -104,6 +173,44 @@ def get_system_prompt() -> str:
     )
     return prompt
 
+# ─── Script extraction helpers ───
+
+SCRIPT_PATTERN = re.compile(r'\[SCRIPT_FILE:(.+?)\](.*?)\[/SCRIPT_FILE\]', re.DOTALL)
+
+def extract_scripts(text: str):
+    """Extract script blocks from bot response. Returns list of (filename, content) tuples."""
+    return [(m.group(1).strip(), m.group(2).strip()) for m in SCRIPT_PATTERN.finditer(text)]
+
+def clean_script_tags(text: str) -> str:
+    """Remove [SCRIPT_FILE:...] tags from the text shown to the user, keeping the code readable."""
+    def replacer(m):
+        filename = m.group(1).strip()
+        code = m.group(2).strip()
+        return f"📄 <b>{filename}</b>\n<pre>{code}</pre>"
+    return SCRIPT_PATTERN.sub(replacer, text)
+
+# ─── Reply-To context helper ───
+
+def build_reply_context(message) -> str:
+    """If the user replied to a specific message, extract the original context."""
+    if not message.reply_to_message:
+        return ""
+    
+    original = message.reply_to_message
+    original_text = original.text or original.caption or ""
+    
+    if not original_text:
+        return ""
+    
+    # Truncate very long original messages
+    if len(original_text) > 500:
+        original_text = original_text[:500] + "..."
+    
+    return f'[המשתמש מגיב (Reply) להודעה קודמת הבאה: "{original_text}"]\n\nתגובת המשתמש: '
+
+
+# ─── Telegram Handlers ───
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command. Resets chat history and sends welcome message."""
     chat_id = update.effective_chat.id
@@ -111,8 +218,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     welcome_text = (
         "<b>שלום! אני FixyBot - בוט התמיכה הטכנית שלך.</b> 🛠️\n\n"
-        "אני מבוסס על מאגר ידע מקצועי של אנשי סיסטם ותמיכה טכנית.\n"
-        "שאל אותי שאלות בנושאי מחשבים, רשתות, מדפסות, תוכנות אופיס ועוד, ואדריך אותך שלב אחר שלב.\n\n"
+        "אני מבוסס על מאגר ידע מקצועי ובינה מלאכותית מתקדמת.\n\n"
+        "<b>תחומי ההתמחות שלי:</b>\n"
+        "🖥️ מחשבי PC — Windows, חומרה, דרייברים, תקלות\n"
+        "🐧 שרתי ומחשבי Linux\n"
+        "📺 טלוויזיות חכמות (Smart TV)\n"
+        "🏠 מוצרי בית חכם (Smart Home)\n"
+        "🖨️ מדפסות, סורקים וציוד היקפי\n"
+        "📧 תוכנות אופיס, Outlook ו-Teams\n"
+        "🔍 מחקר שוק והשוואת מוצרי טכנולוגיה\n\n"
+        "שלח לי תיאור של תקלה, תמונה של שגיאה, או שאל כל שאלה טכנולוגית!\n\n"
         "לרשימת פקודות: /help"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
@@ -123,7 +238,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>פקודות זמינות:</b>\n"
         "/start - איפוס שיחה והצגת הודעת פתיחה\n"
         "/help - הצגת עזרה ורשימת פקודות\n"
-        "/reload - טעינה מחדש של מאגר הידע ישירות מ-GitHub"
+        "/reload - טעינה מחדש של מאגר הידע מ-GitHub\n\n"
+        "<b>מה אני יכול לעשות:</b>\n"
+        "💬 מענה על שאלות טכניות בעברית\n"
+        "📸 ניתוח תמונות של שגיאות ותקלות\n"
+        "📜 יצירת סקריפטים מוכנים להורדה (.bat / .ps1 / .sh)\n"
+        "🔍 מחקר שוק והשוואת מוצרי טכנולוגיה\n"
+        "🔗 מידע על פרויקט FixyBot ב-GitHub\n\n"
+        "<b>טיפ:</b> ניתן להגיב (Reply) להודעה ספציפית כדי לחזור לנושא קודם בשיחה."
     )
     await update.message.reply_text(help_text, parse_mode="HTML")
 
@@ -133,6 +255,11 @@ async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     new_content = kb_manager.load_kb()
     if new_content:
+        # Also refresh GitHub repo info
+        try:
+            github_integration.fetch_repo_info()
+        except Exception:
+            pass
         await update.message.reply_text("✅ מאגר הידע עודכן בהצלחה!", parse_mode="HTML")
     else:
         await update.message.reply_text("❌ שגיאה בטעינת מאגר הידע. נשארנו עם הגרסה הקודמת.", parse_mode="HTML")
@@ -154,12 +281,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Initialize history for this chat if it doesn't exist
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
+
+    # --- Feature 2: Reply-To Context ---
+    reply_context = build_reply_context(update.message)
+    prompt_text = reply_context + user_text if reply_context else user_text
         
     # Append user turn to history
     chat_histories[chat_id].append(
         types.Content(
             role="user",
-            parts=[types.Part(text=user_text)]
+            parts=[types.Part(text=prompt_text)]
         )
     )
     
@@ -193,24 +324,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Keep history to a reasonable limit (last 20 messages) to manage context token usage
         if len(chat_histories[chat_id]) > 20:
             chat_histories[chat_id] = chat_histories[chat_id][-20:]
+
+        # --- Feature 4: Extract and send script files ---
+        scripts = extract_scripts(bot_response)
+        display_text = clean_script_tags(bot_response) if scripts else bot_response
             
         # Try editing temporary message with HTML parsing
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=temp_msg.message_id,
-                text=bot_response,
+                text=display_text,
                 parse_mode="HTML"
             )
         except Exception as telegram_html_error:
             logger.warning(f"Telegram HTML editing failed, falling back to plain text: {telegram_html_error}")
             # Strip HTML tags and send as plain text
-            clean_text = re.sub(r'<[^>]+>', '', bot_response)
+            clean_text = re.sub(r'<[^>]+>', '', display_text)
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=temp_msg.message_id,
                 text=clean_text
             )
+
+        # Send script files as downloadable documents
+        for filename, content in scripts:
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', suffix=f'_{filename}', delete=False, encoding='utf-8') as f:
+                    f.write(content)
+                    temp_path = f.name
+                with open(temp_path, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=f,
+                        filename=filename,
+                        caption=f"📄 סקריפט מוכן להורדה: {filename}"
+                    )
+                os.unlink(temp_path)
+            except Exception as script_err:
+                logger.warning(f"Failed to send script file {filename}: {script_err}")
             
     except Exception as e:
         logger.error(f"Error during message handling: {e}")
@@ -252,9 +404,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Initialize history for this chat if it doesn't exist
         if chat_id not in chat_histories:
             chat_histories[chat_id] = []
+
+        # --- Feature 2: Reply-To Context ---
+        reply_context = build_reply_context(update.message)
             
         # Prepare parts: image part + user prompt
         user_prompt = caption.strip() if caption.strip() else "אנא נתח את תמונת התקלה המצורפת וספק פתרון מפורט."
+        if reply_context:
+            user_prompt = reply_context + user_prompt
+
         parts = [
             types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
             types.Part(text=user_prompt)
@@ -297,23 +455,44 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Keep history to a reasonable limit
         if len(chat_histories[chat_id]) > 20:
             chat_histories[chat_id] = chat_histories[chat_id][-20:]
+
+        # --- Feature 4: Extract and send script files ---
+        scripts = extract_scripts(bot_response)
+        display_text = clean_script_tags(bot_response) if scripts else bot_response
             
         # Try editing temporary message with HTML parsing
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=temp_msg.message_id,
-                text=bot_response,
+                text=display_text,
                 parse_mode="HTML"
             )
         except Exception as telegram_html_error:
             logger.warning(f"Telegram HTML rendering failed for photo analysis, falling back to plain text: {telegram_html_error}")
-            clean_text = re.sub(r'<[^>]+>', '', bot_response)
+            clean_text = re.sub(r'<[^>]+>', '', display_text)
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=temp_msg.message_id,
                 text=clean_text
             )
+
+        # Send script files as downloadable documents
+        for filename, content in scripts:
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', suffix=f'_{filename}', delete=False, encoding='utf-8') as f:
+                    f.write(content)
+                    temp_path = f.name
+                with open(temp_path, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=f,
+                        filename=filename,
+                        caption=f"📄 סקריפט מוכן להורדה: {filename}"
+                    )
+                os.unlink(temp_path)
+            except Exception as script_err:
+                logger.warning(f"Failed to send script file {filename}: {script_err}")
             
     except Exception as e:
         logger.error(f"Error during photo handling: {e}")

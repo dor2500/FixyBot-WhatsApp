@@ -10,3 +10,7 @@ services:
         sync: false
       - key: KB_URL
         sync: false
+      - key: GITHUB_REPO
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
