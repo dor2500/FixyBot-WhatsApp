@@ -8,6 +8,7 @@ const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox',
@@ -111,4 +112,6 @@ client.on('message', async (message) => {
 
 // Start the client
 console.log('מפעיל את שרת הגישור לווצאפ...');
-client.initialize();
+client.initialize().catch(err => {
+    console.error('❌ שגיאה חמורה בהפעלת הווצאפ:', err);
+});
