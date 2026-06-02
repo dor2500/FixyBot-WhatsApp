@@ -36,11 +36,11 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "fixyadmin123")  # Default password if none set
 
 if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment or .env file")
+    logger.warning("TELEGRAM_BOT_TOKEN is not set in environment or .env file")
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY is not set in environment or .env file")
+    logger.warning("GEMINI_API_KEY is not set in environment or .env file")
 if not KB_URL:
-    raise ValueError("KB_URL is not set in environment or .env file")
+    logger.warning("KB_URL is not set in environment or .env file")
 
 # Initialize KB Manager
 kb_manager = KBManager(url=KB_URL)
