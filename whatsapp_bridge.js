@@ -8,7 +8,6 @@ const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox',
@@ -27,7 +26,7 @@ client.on('qr', (qr) => {
     console.log('=========================================\n');
     
     // Print to terminal for Render/Linux
-    qrcodeTerminal.generate(qr, {small: true});
+    qrcodeTerminal.generate(qr, {small: false});
     
     // Also save as image locally for Windows fallback
     QRCode.toFile('qr.png', qr, {

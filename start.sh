@@ -7,4 +7,4 @@ echo "Waiting for Python API to boot up..."
 sleep 5
 
 echo "Starting Node.js WhatsApp Bridge..."
-node whatsapp_bridge.js
+node --max-old-space-size=128 whatsapp_bridge.js
