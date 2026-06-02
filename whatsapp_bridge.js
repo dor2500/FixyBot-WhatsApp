@@ -75,7 +75,8 @@ client.on('message', async (message) => {
         chat.sendStateTyping();
 
         // Send the message text and sender ID to our Python backend
-        const response = await axios.post('http://127.0.0.1:5000/api/chat', {
+        const apiPort = process.env.PORT || 5000;
+        const response = await axios.post(`http://127.0.0.1:${apiPort}/api/chat`, {
             phone: message.from,
             text: textToSend
         }, {
