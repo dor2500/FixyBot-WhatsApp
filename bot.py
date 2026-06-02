@@ -1,12 +1,13 @@
 import os
 import re
+import time
 import logging
 import datetime
 import tempfile
 import requests
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from google import genai
 from google.genai import types
 
@@ -14,12 +15,15 @@ from kb_manager import KBManager
 from github_integration import GitHubIntegration
 from image_annotator import annotate_image
 from corrections_manager import CorrectionsManager
+from web_browser import browse_url
+from it_tools import ping_host, dns_lookup, subnet_calculator
 
 # Configure logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+start_time = time.time()
 
 # Load configuration
 load_dotenv()
@@ -117,6 +121,7 @@ def get_system_prompt() -> str:
 
         "7. הגבלת תחומים (Scope Guardrails):\n"
         "   אתה בוט תמיכה טכנית מקצועי בלבד. אם המשתמש מבקש ממך משהו שאינו קשור לטכנולוגיה, מחשבים, מכשירים אלקטרוניים, רשתות, תוכנות או ציוד טכנולוגי — עליך לסרב בנימוס.\n"
+        "   שים לב: פעולות גלישה באתרי אינטרנט, צילומי מסך של אתרים (כמו בזק, הוט, גוגל, אתרי טכנולוגיה וכו'), בדיקות רשת (כמו פינג או בדיקת DNS), ויצירת תמונות הקשורות לטכנולוגיה הן מותרות לחלוטין והן חלק מתפקידך! אל תסרב לבקשות צילום מסך, רשת או גלישה תחת ה-Guardrails.\n"
         "   דוגמאות לבקשות שעליך לסרב:\n"
         "   - מתכונים, בישול, אוכל\n"
         "   - שירים, שירה, כתיבה יצירתית\n"
@@ -170,7 +175,15 @@ def get_system_prompt() -> str:
         "דוגמה: 'הנה הכפתור שעליך ללחוץ: [VISUAL_MARK:200,800,250,900:כפתור הפעלה]'\n\n"
 
         "13. פרויקט GitHub: אם המשתמש שואל על הפרויקט, קוד המקור, קבצים, מבנה הפרויקט, התקנה או תרומה לפרויקט — "
-        "ענה על בסיס המידע הבא מה-GitHub repository:\n"
+        "ענה על בסיס המידע הבא מה-GitHub repository:\n\n"
+        "14. מענה לגבי Elad Kaufman / אלעד קאופמן:\n"
+        "   אם המשתמש שואל מי זה 'Elad Kaufman' או 'אלעד קאופמן' (או כל וריאציה של השם בעברית או באנגלית), עליך לענות תמיד כך:\n"
+        "   Elad Kaufman הוא מנהל בקבוצות 📰 אלון גרעיני☢️ אפל פארק🍎 וגאדג'טי🧡 יוצר תוכן - Ctech🟣\n"
+        "   קישור לערוץ: https://t.me/Ctech_il\n\n"
+        "15. צילומי מסך, יצירת תמונות וכלי רשת (טכנולוגיות בלבד):\n"
+        "   - צילום מסך: יש לך כלי `take_screenshot` המאפשר לצלם מסך של אתרי אינטרנט. כאשר המשתמש מבקש לצלם מסך של אתר, עליך להשתמש בכלי זה. אם בקשת המשתמש אינה חד משמעית (למשל, הוא מבקש לצלם את 'הוט' / 'HOT' מבלי לציין האם מדובר ב-HOT Telecom או HOT Mobile), אל תפעיל את הכלי, אלא שאל אותו תחילה לאיזה אתר הוא מתכוון (למשל: 'איזה אתר של הוט? HOT Telecom או HOT Mobile?').\n"
+        "   - יצירת תמונות: יש לך כלי `generate_tech_image` המאפשר לייצר תמונות באמצעות בינה מלאכותית. אם המשתמש מבקש תמונה שקשורה לטכנולוגיה, עליך להשתמש בכלי זה ולתאר את התמונה באנגלית מפורטת.\n"
+        "   - כלי רשת ואבחון: יש לך כלים לביצוע פינג (`ping_host`), שאילתות DNS (`dns_lookup`), וחישובי כתובות רשת (`subnet_calculator`). השתמש בהם כאשר משתמש מבקש לבדוק תקשורת, לבדוק רשומות רשת או לחשב סאבנטים.\n"
     )
 
     # Add GitHub repo info
@@ -195,6 +208,92 @@ def get_system_prompt() -> str:
 
     prompt += f"בסיס הידע הפנימי המלא:\n{kb_manager.kb_content}"
     return prompt
+
+def take_screenshot(url: str) -> str:
+    """
+    Takes a screenshot of the specified webpage URL. 
+    Use this tool when the user explicitly asks you to take a screenshot, capture, or photograph a website/URL.
+    
+    IMPORTANT: The url argument must be a valid, specific webpage URL (e.g. 'google.com', 'hot.net.il'). 
+    If the user's request is ambiguous (e.g., they say 'הוט' / 'HOT' without specifying HOT Telecom or HOT Mobile, 
+    or just say 'אתר' without a name), do NOT call this tool. Instead, ask the user to clarify which specific website they mean.
+    
+    Args:
+        url: The specific URL of the webpage to capture.
+        
+    Returns:
+        A special string marker indicating the screenshot was captured.
+    """
+    return f"[SCREENSHOT_SUCCESS:{url}]"
+
+def generate_tech_image(prompt: str) -> str:
+    """
+    Generates an image based on the provided technical or technological prompt.
+    Use this tool when the user asks you to generate, create, draw, or design an image of a PC, hardware, 
+    setup, gadget, smart TV, or other tech/IT device. Do not use for non-tech requests.
+    
+    Args:
+        prompt: Detailed description of the technology image to generate (written in English for best results).
+        
+    Returns:
+        A special string marker indicating the image was generated.
+    """
+    return f"[IMAGE_GEN_SUCCESS:{prompt}]"
+
+def select_tools(text: str) -> list:
+    """
+    Dynamically selects which tools to enable based on the query text.
+    Gemini does not support combining Google Search and custom Function Calling (browse_url, take_screenshot, generate_tech_image, etc.)
+    in the same request, so we select only the required tool.
+    """
+    text_lower = text.lower()
+    
+    # Check if user wants a screenshot
+    wants_screenshot = any(word in text_lower for word in ["צלם", "צילום", "לצלם", "תצלם", "screenshot", "capture"])
+    if wants_screenshot:
+        return [take_screenshot]
+        
+    # Check if user wants to generate an image
+    wants_image_gen = any(word in text_lower for word in ["ג'נרט", "תג'נרט", "תייצר תמונה", "תמונה", "תמונות", "תצייר", "generate image", "create image", "draw image"])
+    if wants_image_gen:
+        return [generate_tech_image]
+
+    # Check if user wants a ping
+    wants_ping = any(word in text_lower for word in ["פינג", "ping", "שיהוי", "latency"])
+    if wants_ping:
+        return [ping_host]
+        
+    # Check if user wants a DNS lookup
+    wants_dns = any(word in text_lower for word in ["dns", "mx", "txt", "ns record", "רשומת", "רשומות"])
+    if wants_dns:
+        return [dns_lookup]
+        
+    # Check if user wants subnet calculation
+    wants_subnet = any(word in text_lower for word in ["סאבנט", "subnet", "cidr", "mask", "טווח כתובות", "netmask"])
+    if wants_subnet:
+        return [subnet_calculator]
+    
+    # Check if we should browse/scrape a URL
+    has_url = "http://" in text_lower or "https://" in text_lower or "www." in text_lower
+    wants_browse = any(word in text_lower for word in ["גלוש", "תקרא", "כנס ל", "תבדוק ב", "browse", "read", "fetch", "check url", "קישור", "לינק"])
+    
+    if has_url or wants_browse:
+        return [browse_url]
+        
+    # Check if the query is a simple greeting, time, location, or Elad Kaufman query
+    greetings = ["שלום", "היי", "הלו", "אהלן", "בוקר טוב", "ערב טוב", "צהריים טובים", "מה קורה", "מה נשמע", "hello", "hi", "hey"]
+    is_greeting = any(g in text_lower for g in greetings) and len(text.split()) <= 3
+    
+    is_elad = "elad kaufman" in text_lower or "אלעד קאופמן" in text_lower
+    
+    time_queries = ["מה השעה", "מה התאריך", "מה היום", "איפה אני", "מה המיקום", "שעה נוכחית", "תאריך נוכחי"]
+    is_time_query = any(q in text_lower for q in time_queries)
+    
+    if is_greeting or is_elad or is_time_query:
+        return []
+        
+    # Default to Google Search tool for all other inquiries as backup
+    return [types.Tool(google_search=types.GoogleSearch())]
 
 # ─── Script extraction helpers ───
 
@@ -373,17 +472,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
-    # Instantly reply with a cute loading GIF
-    LOADING_GIF_URL = "https://media.tenor.com/On7kvXhzml4AAAAj/loading-gif.gif"
-    try:
-        temp_msg = await update.message.reply_animation(
-            animation=LOADING_GIF_URL,
-            caption="🔍 <b>מנתח וחושב...</b>",
-            parse_mode="HTML"
-        )
-    except Exception:
-        # Fallback to text if GIF fails
-        temp_msg = await update.message.reply_text("🔍 <b>מנתח וחושב...</b>", parse_mode="HTML")
+    # Instantly reply with a fast text-based loading message
+    temp_msg = await update.message.reply_text("🔍 <b>מנתח וחושב...</b>", parse_mode="HTML")
 
     # Trigger typing action in Telegram
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -395,68 +485,75 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- Feature 2: Reply-To Context ---
     reply_context = build_reply_context(update.message)
     prompt_text = reply_context + user_text if reply_context else user_text
-        
-    # Append user turn to history
-    chat_histories[chat_id].append(
-        types.Content(
-            role="user",
-            parts=[types.Part(text=prompt_text)]
-        )
-    )
     
     try:
-        # Build generation configuration with latest system instruction and Google Search grounding
+        # Dynamically select tools based on user text to avoid API constraints
+        selected_tools = select_tools(prompt_text)
+        
+        # Build generation configuration with latest system instruction and selected tools
         config = types.GenerateContentConfig(
             system_instruction=get_system_prompt(),
-            tools=[types.Tool(google_search=types.GoogleSearch())],
+            tools=selected_tools,
             temperature=0.3,  # Low temperature for high precision and factual recall
         )
         
-        # Call the Gemini API using the new google-genai SDK
-        response = genai_client.models.generate_content(
+        # Create chat session with current history
+        chat = genai_client.chats.create(
             model="gemini-2.5-flash",
-            contents=chat_histories[chat_id],
+            history=chat_histories[chat_id],
             config=config
         )
+        
+        # Send message (handles function calling automatically)
+        response = chat.send_message(prompt_text)
+        
+        # Update history store
+        chat_histories[chat_id] = chat.get_history()
         
         bot_response = response.text
         if not bot_response:
             bot_response = "לא הצלחתי למצוא תשובה מתאימה במאגר הידע."
             
-        # Append model response to history
-        chat_histories[chat_id].append(
-            types.Content(
-                role="model",
-                parts=[types.Part(text=bot_response)]
-            )
-        )
-        
+        # Clean internal thought process exposed by Gemini Search Grounding
+        bot_response = re.sub(r'^(?:tool_code\s*.*?)?thought\s*.*?(?=[\u0590-\u05FF])', '', bot_response, flags=re.DOTALL | re.IGNORECASE).strip()
+        bot_response = re.sub(r'^tool_code\s*.*?(?=[\u0590-\u05FF])', '', bot_response, flags=re.DOTALL | re.IGNORECASE).strip()
+            
         # Keep history to a reasonable limit (last 20 messages) to manage context token usage
         if len(chat_histories[chat_id]) > 20:
             chat_histories[chat_id] = chat_histories[chat_id][-20:]
+
+        # Check for screenshot marker
+        screenshot_url = None
+        if "[SCREENSHOT_SUCCESS:" in bot_response:
+            m = re.search(r'\[SCREENSHOT_SUCCESS:(.+?)\]', bot_response)
+            if m:
+                screenshot_url = m.group(1).strip()
+                bot_response = bot_response.replace(m.group(0), "").strip()
+
+        # Check for image generation marker
+        image_prompt = None
+        if "[IMAGE_GEN_SUCCESS:" in bot_response:
+            m = re.search(r'\[IMAGE_GEN_SUCCESS:(.+?)\]', bot_response)
+            if m:
+                image_prompt = m.group(1).strip()
+                bot_response = bot_response.replace(m.group(0), "").strip()
 
         # --- Feature 4: Extract and send script files ---
         scripts = extract_scripts(bot_response)
         display_text = clean_script_tags(bot_response) if scripts else bot_response
             
-        # Send the final text and delete the loading animation
+        # Edit the loading message in-place
         try:
-            await context.bot.send_message(
-                chat_id=chat_id,
+            await temp_msg.edit_text(
                 text=display_text,
-                parse_mode="HTML",
-                reply_to_message_id=update.message.message_id
+                parse_mode="HTML"
             )
-            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
         except Exception as telegram_html_error:
             logger.warning(f"Telegram HTML failed, falling back to plain text: {telegram_html_error}")
             clean_text = re.sub(r'<[^>]+>', '', display_text)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=clean_text,
-                reply_to_message_id=update.message.message_id
+            await temp_msg.edit_text(
+                text=clean_text
             )
-            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
 
         # Send script files as downloadable documents
         for filename, content in scripts:
@@ -474,36 +571,71 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.unlink(temp_path)
             except Exception as script_err:
                 logger.warning(f"Failed to send script file {filename}: {script_err}")
+                
+        # Send screenshot if requested
+        if screenshot_url:
+            try:
+                await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+                api_url = f"https://image.thum.io/get/width/1280/crop/800/{screenshot_url}"
+                resp = requests.get(api_url, timeout=20)
+                if resp.status_code == 200:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=resp.content,
+                        caption=f"📸 צילום מסך של {screenshot_url}",
+                        reply_to_message_id=update.message.message_id
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ לא הצלחתי לצלם את המסך של האתר המבוקש.",
+                        reply_to_message_id=update.message.message_id
+                    )
+            except Exception as e:
+                logger.error(f"Error fetching screenshot: {e}")
+
+        # Send generated image if requested
+        if image_prompt:
+            try:
+                await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+                import urllib.parse
+                encoded = urllib.parse.quote(image_prompt)
+                api_url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
+                resp = requests.get(api_url, timeout=25)
+                if resp.status_code == 200:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=resp.content,
+                        caption=f"🎨 תמונה שג'ונרטה עבור: \"{image_prompt}\"",
+                        reply_to_message_id=update.message.message_id
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ לא הצלחתי לג'נרט את התמונה המבוקשת.",
+                        reply_to_message_id=update.message.message_id
+                    )
+            except Exception as e:
+                logger.error(f"Error generating image: {e}")
             
     except Exception as e:
         logger.error(f"Error during message handling: {e}")
-        # Clean up history if request failed
-        if chat_histories[chat_id] and chat_histories[chat_id][-1].role == "user":
-            chat_histories[chat_id].pop()
-            
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=temp_msg.message_id,
-            text="⚠️ <b>מצטער, חלה שגיאה בעיבוד הבקשה שלך.</b>\nאנא נסה שוב או פנה למנהל המערכת.",
-            parse_mode="HTML"
-        )
+        try:
+            await temp_msg.edit_text(
+                text="⚠️ <b>מצטער, חלה שגיאה בעיבוד הבקשה שלך.</b>\nאנא נסה שוב או פנה למנהל המערכת.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Processes images of errors sent by users, calls Gemini API, and replies by editing a temporary message."""
     chat_id = update.effective_chat.id
     caption = update.message.caption or ""
     
-    # Instantly reply with a cute loading GIF
-    LOADING_GIF_URL = "https://media.tenor.com/On7kvXhzml4AAAAj/loading-gif.gif"
-    try:
-        temp_msg = await update.message.reply_animation(
-            animation=LOADING_GIF_URL,
-            caption="🔍 <b>מנתח את התמונה ומחפש פתרון...</b>",
-            parse_mode="HTML"
-        )
-    except Exception:
-        # Fallback to text if GIF fails
-        temp_msg = await update.message.reply_text("🔍 <b>מנתח את התמונה ומחפש פתרון...</b>", parse_mode="HTML")
+    # Instantly reply with a fast text-based loading message
+    temp_msg = await update.message.reply_text("🔍 <b>מנתח את התמונה ומחפש פתרון...</b>", parse_mode="HTML")
 
     # Trigger typing action in Telegram
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -538,43 +670,55 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             types.Part(text=user_prompt)
         ]
         
-        # Append user turn to history
-        chat_histories[chat_id].append(
-            types.Content(
-                role="user",
-                parts=parts
-            )
-        )
+        # Dynamically select tools based on user text to avoid API constraints
+        selected_tools = select_tools(user_prompt)
         
-        # Build configuration with latest system prompt and search tools
         config = types.GenerateContentConfig(
             system_instruction=get_system_prompt(),
-            tools=[types.Tool(google_search=types.GoogleSearch())],
+            tools=selected_tools,
             temperature=0.3,
         )
         
-        # Call Gemini API
-        response = genai_client.models.generate_content(
+        # Create chat session with current history
+        chat = genai_client.chats.create(
             model="gemini-2.5-flash",
-            contents=chat_histories[chat_id],
+            history=chat_histories[chat_id],
             config=config
         )
+        
+        # Send message with image and text parts (handles function calling automatically)
+        response = chat.send_message(parts)
+        
+        # Update history store
+        chat_histories[chat_id] = chat.get_history()
         
         bot_response = response.text
         if not bot_response:
             bot_response = "לא הצלחתי לנתח את התמונה או למצוא פתרון מתאים."
             
-        # Append model response to history
-        chat_histories[chat_id].append(
-            types.Content(
-                role="model",
-                parts=[types.Part(text=bot_response)]
-            )
-        )
-        
+        # Clean internal thought process exposed by Gemini Search Grounding
+        bot_response = re.sub(r'^(?:tool_code\s*.*?)?thought\s*.*?(?=[\u0590-\u05FF])', '', bot_response, flags=re.DOTALL | re.IGNORECASE).strip()
+        bot_response = re.sub(r'^tool_code\s*.*?(?=[\u0590-\u05FF])', '', bot_response, flags=re.DOTALL | re.IGNORECASE).strip()
+            
         # Keep history to a reasonable limit
         if len(chat_histories[chat_id]) > 20:
             chat_histories[chat_id] = chat_histories[chat_id][-20:]
+
+        # Check for screenshot marker
+        screenshot_url = None
+        if "[SCREENSHOT_SUCCESS:" in bot_response:
+            m = re.search(r'\[SCREENSHOT_SUCCESS:(.+?)\]', bot_response)
+            if m:
+                screenshot_url = m.group(1).strip()
+                bot_response = bot_response.replace(m.group(0), "").strip()
+
+        # Check for image generation marker
+        image_prompt = None
+        if "[IMAGE_GEN_SUCCESS:" in bot_response:
+            m = re.search(r'\[IMAGE_GEN_SUCCESS:(.+?)\]', bot_response)
+            if m:
+                image_prompt = m.group(1).strip()
+                bot_response = bot_response.replace(m.group(0), "").strip()
 
         # --- Feature 1: Visual Grounding ---
         visual_marks = VISUAL_MARK_PATTERN.findall(bot_response)
@@ -589,7 +733,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Error drawing visual mark {mark}: {e}")
             
-            # Send the annotated image
+            # Send the annotated image as a new message
             await context.bot.send_photo(chat_id=chat_id, photo=annotated_bytes, reply_to_message_id=update.message.message_id)
 
         # Remove the VISUAL_MARK tags from the text
@@ -599,24 +743,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         scripts = extract_scripts(display_text)
         display_text = clean_script_tags(display_text) if scripts else display_text
             
-        # Send the final text and delete the loading animation
+        # Edit the loading message in-place
         try:
-            await context.bot.send_message(
-                chat_id=chat_id,
+            await temp_msg.edit_text(
                 text=display_text,
-                parse_mode="HTML",
-                reply_to_message_id=update.message.message_id
+                parse_mode="HTML"
             )
-            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
         except Exception as telegram_html_error:
             logger.warning(f"Telegram HTML failed for photo analysis, falling back to plain text: {telegram_html_error}")
             clean_text = re.sub(r'<[^>]+>', '', display_text)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=clean_text,
-                reply_to_message_id=update.message.message_id
+            await temp_msg.edit_text(
+                text=clean_text
             )
-            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
 
         # Send script files as downloadable documents
         for filename, content in scripts:
@@ -634,17 +772,255 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.unlink(temp_path)
             except Exception as script_err:
                 logger.warning(f"Failed to send script file {filename}: {script_err}")
+
+        # Send screenshot if requested
+        if screenshot_url:
+            try:
+                await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+                api_url = f"https://image.thum.io/get/width/1280/crop/800/{screenshot_url}"
+                resp = requests.get(api_url, timeout=20)
+                if resp.status_code == 200:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=resp.content,
+                        caption=f"📸 צילום מסך של {screenshot_url}",
+                        reply_to_message_id=update.message.message_id
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ לא הצלחתי לצלם את המסך של האתר המבוקש.",
+                        reply_to_message_id=update.message.message_id
+                    )
+            except Exception as e:
+                logger.error(f"Error fetching screenshot: {e}")
+
+        # Send generated image if requested
+        if image_prompt:
+            try:
+                await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+                import urllib.parse
+                encoded = urllib.parse.quote(image_prompt)
+                api_url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
+                resp = requests.get(api_url, timeout=25)
+                if resp.status_code == 200:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=resp.content,
+                        caption=f"🎨 תמונה שג'ונרטה עבור: \"{image_prompt}\"",
+                        reply_to_message_id=update.message.message_id
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ לא הצלחתי לג'נרט את התמונה המבוקשת.",
+                        reply_to_message_id=update.message.message_id
+                    )
+            except Exception as e:
+                logger.error(f"Error generating image: {e}")
             
     except Exception as e:
         logger.error(f"Error during photo handling: {e}")
-        # Clean up history if request failed
-        if chat_histories[chat_id] and chat_histories[chat_id][-1].role == "user":
-            chat_histories[chat_id].pop()
-            
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=temp_msg.message_id,
-            text="⚠️ <b>מצטער, חלה שגיאה בניתוח התמונה שלך.</b>\nאנא ודא שהתמונה ברורה ונסה שוב.",
+        try:
+            await temp_msg.edit_text(
+                text="⚠️ <b>מצטער, חלה שגיאה בניתוח התמונה שלך.</b>\nאנא ודא שהתמונה ברורה ונסה שוב.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+# ─── IT System & Diagnostic Wizard Handlers ───
+
+async def sysinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for the /sysinfo command. Displays system specifications."""
+    import platform
+    import sys
+    import telegram
+    
+    now = datetime.datetime.now()
+    uptime_seconds = int(time.time() - start_time) if 'start_time' in globals() else 0
+    uptime = str(datetime.timedelta(seconds=uptime_seconds))
+    
+    sys_text = (
+        "📊 <b>מידע על מערכת FixyBot:</b>\n\n"
+        f"- 💻 מערכת הפעלה: <code>{platform.system()} {platform.release()}</code>\n"
+        f"- 🐍 גרסת פייתון: <code>{platform.python_version()}</code>\n"
+        f"- 🕰️ זמן שרת מקומי: <code>{now.strftime('%H:%M:%S (%Y-%m-%d)')}</code>\n"
+        f"- 📍 מיקום מזהה: <code>{location_info.get('city')}, {location_info.get('country')}</code>\n"
+        f"- ⏱️ זמן פעילות (Uptime): <code>{uptime}</code>\n"
+        f"- 📦 ספריות ליבה: <code>python-telegram-bot {telegram.__version__}</code>\n"
+    )
+    await update.message.reply_text(sys_text, parse_mode="HTML")
+
+# Diagnostic trees data
+DIAGNOSTIC_TREES = {
+    "menu": {
+        "text": "🛠️ <b>ברוך הבא לאשף הדיאגנוסטיקה האינטראקטיבי!</b>\nאנא בחר קטגוריה כדי להתחיל בתהליך האבחון:",
+        "buttons": [
+            [InlineKeyboardButton("🖥️ מחשב ו-Windows", callback_data="diag_pc")],
+            [InlineKeyboardButton("🌐 רשת ואינטרנט", callback_data="diag_net")],
+            [InlineKeyboardButton("📺 טלוויזיה חכמה", callback_data="diag_tv")],
+            [InlineKeyboardButton("🏠 בית חכם", callback_data="diag_home")],
+            [InlineKeyboardButton("❌ סגור אשף", callback_data="diag_close")]
+        ]
+    },
+    "diag_pc": {
+        "text": "🖥️ <b>אבחון בעיות מחשב ו-Windows:</b>\nבחר את הבעיה הספציפית בה נתקלת:",
+        "buttons": [
+            [InlineKeyboardButton("🐌 המחשב איטי או תקוע", callback_data="pc_slow")],
+            [InlineKeyboardButton("🔵 מסך כחול (BSOD)", callback_data="pc_bsod")],
+            [InlineKeyboardButton("🔄 עדכוני Windows נכשלים", callback_data="pc_update")],
+            [InlineKeyboardButton("🔙 חזור לתפריט", callback_data="diag_menu")]
+        ]
+    },
+    "diag_net": {
+        "text": "🌐 <b>אבחון בעיות רשת ואינטרנט:</b>\nבחר את סוג התקלה:",
+        "buttons": [
+            [InlineKeyboardButton("❌ אין חיבור לאינטרנט בכלל", callback_data="net_no_conn")],
+            [InlineKeyboardButton("🐌 גלישה איטית או ניתוקים", callback_data="net_slow")],
+            [InlineKeyboardButton("📶 בעיות קליטה ב-Wi-Fi", callback_data="net_wifi")],
+            [InlineKeyboardButton("🔙 חזור לתפריט", callback_data="diag_menu")]
+        ]
+    },
+    "diag_tv": {
+        "text": "📺 <b>אבחון טלוויזיות חכמות:</b>\nבחר את הבעיה:",
+        "buttons": [
+            [InlineKeyboardButton("🔌 לא מתחברת ל-Wi-Fi", callback_data="tv_wifi")],
+            [InlineKeyboardButton("📺 אפליקציות לא נפתחות", callback_data="tv_apps")],
+            [InlineKeyboardButton("📲 בעיה בשיקוף מסך (Cast)", callback_data="tv_cast")],
+            [InlineKeyboardButton("🔙 חזור לתפריט", callback_data="diag_menu")]
+        ]
+    },
+    "diag_home": {
+        "text": "🏠 <b>אבחון מוצרי בית חכם:</b>\nבחר את הקטגוריה:",
+        "buttons": [
+            [InlineKeyboardButton("🎙️ עוזרת קולית לא מגיבה", callback_data="home_voice")],
+            [InlineKeyboardButton("💡 מנורות/מתגים לא מתחברים", callback_data="home_smart")],
+            [InlineKeyboardButton("📷 מצלמות אבטחה מנותקות", callback_data="home_cam")],
+            [InlineKeyboardButton("🔙 חזור לתפריט", callback_data="diag_menu")]
+        ]
+    },
+    # Final resolutions
+    "pc_slow": {
+        "text": "🐌 <b>פתרונות למחשב איטי:</b>\n"
+                "1. פתח מנהל משימות (Ctrl+Shift+Esc) ובדוק מה מעמיס על ה-CPU או הזיכרון.\n"
+                "2. נקה קבצים זמניים: הקלד <code>%temp%</code> בתיבת ההרצה (Win+R) ומחק הכל.\n"
+                "3. בטל אפליקציות שנדלקות ברקע עם עליית הווינדוס (Startup apps).\n"
+                "4. מומלץ לבדוק נפח דיסק פנוי ולבצע סריקת וירוסים.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון PC", callback_data="diag_pc")]]
+    },
+    "pc_bsod": {
+        "text": "🔵 <b>פתרונות למסכים כחולים (BSOD):</b>\n"
+                "1. רשום לעצמך את קוד השגיאה שמופיע (למשל <code>PAGE_FAULT_IN_NONPAGED_AREA</code>).\n"
+                "2. אם חיברת חומרה חדשה לאחרונה, נתק אותה ובדוק אם התופעה חוזרת.\n"
+                "3. עדכן את דרייבר כרטיס המסך והלוח מאתר היצרן הרשמי.\n"
+                "4. בצע בדיקת קבצי מערכת: הרץ ב-CMD כמנהל את הפקודה <code>sfc /scannow</code>.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון PC", callback_data="diag_pc")]]
+    },
+    "pc_update": {
+        "text": "🔄 <b>פתרונות לעדכוני Windows שנכשלים:</b>\n"
+                "1. הרץ את פותר הבעיות של העדכונים: <code>Settings > System > Troubleshoot > Other troubleshooters > Windows Update</code>.\n"
+                "2. אפס את שירותי העדכון: הרץ את פותר הבעיות או אפס בעזרת סקריפט CMD.\n"
+                "3. ודא שיש לפחות 20GB פנויים בכונן C.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון PC", callback_data="diag_pc")]]
+    },
+    "net_no_conn": {
+        "text": "❌ <b>פתרונות לחוסר חיבור לאינטרנט:</b>\n"
+                "1. כבה והדלק את הראוטר (המתן 30 שניות לפני החיבור מחדש).\n"
+                "2. ודא שנורית ה-Internet בראוטר דולקת בצבע תקין (ירוק/כחול).\n"
+                "3. בצע איפוס לרשת במחשב: הרץ ב-CMD כמנהל: <code>netsh winsock reset</code> ואז בצע הפעלה מחדש למחשב.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון רשת", callback_data="diag_net")]]
+    },
+    "net_slow": {
+        "text": "🐌 <b>פתרונות לאינטרנט איטי או ניתוקים:</b>\n"
+                "1. בצע בדיקת מהירות באתר <code>speedtest.net</code> ובדוק אם המהירות תואמת לחבילה.\n"
+                "2. ודא שאף מכשיר אחר ברשת לא מבצע הורדה כבדה ברקע.\n"
+                "3. החלף את שרת ה-DNS במחשב לשרתים של Cloudflare (<code>1.1.1.1</code>) או Google (<code>8.8.8.8</code>).",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון רשת", callback_data="diag_net")]]
+    },
+    "net_wifi": {
+        "text": "📶 <b>פתרונות לבעיות קליטת Wi-Fi:</b>\n"
+                "1. מקם את הראוטר במקום פתוח ומרכזי בבית, רחוק ממכשירי מיקרוגל או קירות בטון עבים.\n"
+                "2. התחבר לתדר 5GHz אם המכשיר קרוב לראוטר, או לתדר 2.4GHz לטווחים ארוכים יותר.\n"
+                "3. במידת הצורך, שקול הוספת מגדיל טווח (Wi-Fi Extender) או מערכת Mesh.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון רשת", callback_data="diag_net")]]
+    },
+    "tv_wifi": {
+        "text": "📺 <b>פתרונות לבעיות חיבור Wi-Fi בטלוויזיה:</b>\n"
+                "1. נתק את הטלוויזיה מהחשמל ל-60 שניות (זה מאפס את כרטיס הרשת של הטלוויזיה).\n"
+                "2. היכנס להגדרות הרשת בטלוויזיה ובצע 'שכח רשת' (Forget Network) והתחבר מחדש.\n"
+                "3. ודא שתדר ה-Wi-Fi של הראוטר אינו חסום בטלוויזיה (חלק מהטלוויזיות לא תומכות בערוצי 5GHz מסוימים).",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון טלוויזיה", callback_data="diag_tv")]]
+    },
+    "tv_apps": {
+        "text": "📺 <b>פתרונות לאפליקציות שלא נפתחות בטלוויזיה:</b>\n"
+                "1. ודא שהטלוויזיה מעודכנת לגרסת הקושחה (Firmware) האחרונה בהגדרות המערכת.\n"
+                "2. מחק את האפליקציה הספציפית והתקן אותה מחדש מחנות האפליקציות.\n"
+                "3. בצע ניקוי מטמון (Clear Cache) לאפליקציה דרך מנהל היישומים בטלוויזיה.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון טלוויזיה", callback_data="diag_tv")]]
+    },
+    "tv_cast": {
+        "text": "📲 <b>פתרונות לבעיות שיקוף מסך (Cast):</b>\n"
+                "1. ודא שהסמארטפון/מחשב והטלוויזיה מחוברים **בדיוק לאותה רשת Wi-Fi** (ולא שאחד ב-5Ghz והשני ב-2.4Ghz ברשת אורחים).\n"
+                "2. הפעל מחדש את הסמארטפון ואת הטלוויזיה.\n"
+                "3. בטלוויזיות Android TV, ודא שאפליקציית 'Chromecast Built-in' מעודכנת.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון טלוויזיה", callback_data="diag_tv")]]
+    },
+    "home_voice": {
+        "text": "🎙️ <b>פתרונות לעוזרת קולית (Alexa/Google Home) לא מגיבה:</b>\n"
+                "1. ודא שכפתור השתקת המיקרופון הפיזי במכשיר אינו לחוץ (צבע אדום/כתום).\n"
+                "2. נתק את המכשיר מהחשמל וחבר מחדש.\n"
+                "3. פתח את אפליקציית הניהול בטלפון (Google Home או Alexa) וודא שהמכשיר מחובר ל-Wi-Fi ומוגדר כראוי.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון בית חכם", callback_data="diag_home")]]
+    },
+    "home_smart": {
+        "text": "💡 <b>פתרונות למנורות או מתגים חכמים שלא מגיבים:</b>\n"
+                "1. ודא שהמתג הפיזי בקיר דולק (כדי שהמנורה החכמה תקבל זרם).\n"
+                "2. ודא שהראוטר שלך משדר בתדר 2.4GHz (רוב מוצרי הבית החכם עובדים **אך ורק** בתדר 2.4GHz ולא יתחברו ל-5GHz).\n"
+                "3. בצע איפוס לרכיב (למשל: הדלקה וכיבוי של המנורה 5 פעמים ברצף) וחבר מחדש באפליקציה.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון בית חכם", callback_data="diag_home")]]
+    },
+    "home_cam": {
+        "text": "📷 <b>פתרונות למצלמות אבטחה מנותקות:</b>\n"
+                "1. בדוק אם המצלמה מקבלת חשמל (חפש נורית חיווי דולקת).\n"
+                "2. ודא שקליטת ה-Wi-Fi במיקום המצלמה חזקה מספיק (בדוק עם הטלפון שלך באותו המיקום).\n"
+                "3. הפעל מחדש את הראוטר ומצלמת האבטחה.",
+        "buttons": [[InlineKeyboardButton("🔙 חזור לאבחון בית חכם", callback_data="diag_home")]]
+    }
+}
+
+async def diagnose_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Starts the interactive diagnostic wizard."""
+    tree = DIAGNOSTIC_TREES["menu"]
+    keyboard = InlineKeyboardMarkup(tree["buttons"])
+    await update.message.reply_text(
+        text=tree["text"],
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+async def handle_diagnose_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processes clicks on inline keyboard buttons in the diagnostic wizard."""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    if data == "diag_close":
+        await query.message.edit_text("❌ אשף הדיאגנוסטיקה נסגר.")
+        return
+        
+    node = data
+    if data == "diag_menu":
+        node = "menu"
+        
+    if node in DIAGNOSTIC_TREES:
+        tree = DIAGNOSTIC_TREES[node]
+        keyboard = InlineKeyboardMarkup(tree["buttons"])
+        await query.message.edit_text(
+            text=tree["text"],
+            reply_markup=keyboard,
             parse_mode="HTML"
         )
 
@@ -671,6 +1047,9 @@ def main():
     app.add_handler(CommandHandler("correct", correct_command))
     app.add_handler(CommandHandler("corrections", list_corrections_command))
     app.add_handler(CommandHandler("del_correction", del_correction_command))
+    app.add_handler(CommandHandler("sysinfo", sysinfo_command))
+    app.add_handler(CommandHandler("diagnose", diagnose_command))
+    app.add_handler(CallbackQueryHandler(handle_diagnose_click))
     
     # Process photos and image documents (like uncompressed screenshots)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
